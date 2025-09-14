@@ -85,7 +85,7 @@ jobs:
         working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
         run: |
           terraform plan -input=false -lock=false -out=tfplan.bin \
-            -var="instance_type=m5.large" \
+            -var="instance_type=m5.2xlarge" \
             -var="root_volume_size=100"
           terraform show -json tfplan.bin > tfplan.json
 
