@@ -6,32 +6,42 @@ branding:
 
 inputs:
   working_dir:
+    description: The working directory for the action.
     required: false
     default: .
   currency:
+    description: The currency to use for cost calculations (e.g., USD, INR).
     required: false
     default: INR
   infracost_version:
+    description: The version of Infracost to install (e.g., latest, 0.9.0).
     required: false
     default: latest
   comment_marker:
+    description: The marker used to identify Infracost comments in pull requests.
     required: false
     default: "<!-- infracost-comment -->"
   infracost_api_key:
+    description: The API key for Infracost.
     required: false
   ping_author:
+    description: Whether to ping the author in the PR comment.
     required: false
     default: "true"
   mention_handles:
+    description: A comma-separated list of GitHub handles to mention in the PR comment.
     required: false
     default: ""
   base_infracost_path:
+    description: The path to the base Infracost JSON file.
     required: false
     default: ""
   base_tfplan_path:
+    description: The path to the base Terraform plan file.
     required: false
     default: ""
   compare_with_git_base:
+    description: Whether to compare with the git base when running Infracost.
     required: false
     default: "true"
 
