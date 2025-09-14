@@ -1,8 +1,8 @@
 # .github/fixtures/terraform/main.tf
 terraform {
-  required_version = ">= 1.12.0"
+  required_version = ">= 1.5.0"
   required_providers {
-    aws = { source = "hashicorp/aws", version = "~> 6.12.0" }
+    aws = { source = "hashicorp/aws", version = "~> 5.0" }
   }
 }
 
@@ -25,7 +25,5 @@ resource "aws_ebs_volume" "test" {
   availability_zone = "us-east-1a"
   size              = var.size_gb
   type              = "gp3"
-  tags = {
-    Name = "infracost-local-ebs"
-  }
+  tags = { Name = "infracost-local-ebs" }
 }

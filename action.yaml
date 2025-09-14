@@ -79,6 +79,7 @@ runs:
       run: |
         set -euo pipefail
         mode="breakdown"
+
         resolve() {
           p="${1:-}"
           [ -z "$p" ] && { echo ""; return; }
@@ -86,36 +87,46 @@ runs:
           [ -f "$GITHUB_WORKSPACE/$p" ] && { echo "$GITHUB_WORKSPACE/$p"; return; }
           echo ""
         }
+
         BASE_INFRA="$(resolve "${{ inputs.base_infracost_path }}")"
         BASE_TFPLAN="$(resolve "${{ inputs.base_tfplan_path }}")"
+
         if [ -n "$BASE_INFRA" ]; then
           infracost diff \
             --path tfplan.json \
             --compare-to "$BASE_INFRA" \
             --format json --out-file infracost.out.json
           mode="diff"
+
         elif [ -n "$BASE_TFPLAN" ]; then
           infracost breakdown \
             --path "$BASE_TFPLAN" \
             --format json --out-file .infracost-base.json
+
           infracost diff \
             --path tfplan.json \
             --compare-to .infracost-base.json \
             --format json --out-file infracost.out.json
           mode="diff"
+
         elif [ "${{ inputs.compare_with_git_base }}" = "true" ] && [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
           infracost diff \
             --path tfplan.json \
             --compare-to git:base \
             --format json --out-file infracost.out.json
           mode="diff"
+
         else
           test -f tfplan.json
           infracost breakdown \
             --path tfplan.json \
             --format json --out-file infracost.out.json
         fi
+
         echo "$mode" > .infracost_mode
+
+        infracost breakdown --path tfplan.json --format table --show-skipped || true
+        jq '{currency, summary, projects: (.projects // []) | length as n_projects}' infracost.out.json || true
 
     - name: Build visual table
       shell: bash
