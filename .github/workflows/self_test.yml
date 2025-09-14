@@ -1,0 +1,104 @@
+name: Infracost Core — Self Test on PR
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - "action.yml"
+      - ".github/scripts/infracost_comment.py"
+      - ".github/fixtures/terraform/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  selftest:
+    runs-on: ubuntu-24.04
+    env:
+      TF_ACTIONS_WORKING_DIR: .github/fixtures/terraform
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Ensure Terraform fixture
+        run: |
+          mkdir -p .github/fixtures/terraform
+          cat > .github/fixtures/terraform/main.tf <<'HCL'
+          terraform {
+            required_version = ">= 1.5.0"
+            required_providers {
+              aws = { source = "hashicorp/aws", version = "~> 5.0" }
+            }
+          }
+          provider "aws" {
+            region                      = "us-east-1"
+            access_key                  = "mock"
+            secret_key                  = "mock"
+            skip_credentials_validation = true
+            skip_metadata_api_check     = true
+            skip_requesting_account_id  = true
+            skip_region_validation      = true
+          }
+          variable "size_gb" {
+            type    = number
+            default = 20
+          }
+          resource "aws_ebs_volume" "test" {
+            availability_zone = "us-east-1a"
+            size              = var.size_gb
+            type              = "gp3"
+            tags = { Name = "infracost-local-ebs" }
+          }
+          HCL
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
+        run: terraform init -input=false
+
+      - name: Terraform plan (baseline)
+        working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
+        run: |
+          terraform plan -input=false -lock=false -out=tfplan.bin -var="size_gb=20"
+          terraform show -json tfplan.bin > tfplan.json
+          mkdir -p "$GITHUB_WORKSPACE/_base/${{ env.TF_ACTIONS_WORKING_DIR }}"
+          cp tfplan.json "$GITHUB_WORKSPACE/_base/${{ env.TF_ACTIONS_WORKING_DIR }}/tfplan.json"
+
+      - name: Terraform plan (PR)
+        working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
+        run: |
+          terraform plan -input=false -lock=false -out=tfplan.bin -var="size_gb=200"
+          terraform show -json tfplan.bin > tfplan.json
+
+      - name: Infracost self-test (local action)
+        uses: ./
+        with:
+          working_dir: ${{ env.TF_ACTIONS_WORKING_DIR }}
+          base_tfplan_path: ${{ github.workspace }}/_base/${{ env.TF_ACTIONS_WORKING_DIR }}/tfplan.json
+          currency: USD
+          ping_author: "true"
+          mention_handles: "@infracost-bot"
+        env:
+          INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Append table to job summary
+        if: ${{ always() }}
+        working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
+        run: cat infracost_comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Infracost artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: infracost-selftest
+          path: |
+            ${{ env.TF_ACTIONS_WORKING_DIR }}/infracost.out.json
+            ${{ env.TF_ACTIONS_WORKING_DIR }}/infracost_comment.md
+            _base/${{ env.TF_ACTIONS_WORKING_DIR }}/tfplan.json
+            ${{ env.TF_ACTIONS_WORKING_DIR }}/tfplan.json

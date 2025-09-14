@@ -1,187 +1,127 @@
-name: infracost-core
-description: Infracost on tfplan.json with monthly, daily, hourly and PR mentions
-branding:
-  icon: dollar-sign
-  color: green
-
+name: "Infracost Core"
+description: "Render current vs future cloud cost table and comment on PR"
 inputs:
   working_dir:
-    required: false
-    default: .
+    description: "Directory that contains tfplan.json for the PR plan"
+    required: true
+  base_tfplan_path:
+    description: "Absolute path to baseline tfplan.json to compare against"
+    required: true
   currency:
+    description: "Currency code, e.g., USD, EUR, INR"
     required: false
-    default: SEK
-  behavior:
-    required: false
-    default: update
-  infracost_version:
-    required: false
-    default: latest
-  comment_marker:
-    required: false
-    default: "<!-- infracost-comment -->"
-  infracost_api_key:
-    required: false
+    default: USD
   ping_author:
+    description: "Ping PR author in the comment"
     required: false
     default: "true"
   mention_handles:
+    description: "Space-separated or @-prefixed handles to mention"
     required: false
     default: ""
-  base_infracost_path:
+  infracost_version:
+    description: "Infracost CLI version"
     required: false
-    default: ""
-  base_tfplan_path:
+    default: "latest"
+  comment_marker:
+    description: "Marker to allow updates"
     required: false
-    default: ""
-
-outputs:
-  total_monthly_cost:
-    value: ${{ steps.set_outputs.outputs.total_monthly_cost }}
-  diff_monthly_cost:
-    value: ${{ steps.set_outputs.outputs.diff_monthly_cost }}
-  currency:
-    value: ${{ steps.set_outputs.outputs.currency }}
-  total_daily_cost:
-    value: ${{ steps.set_outputs.outputs.total_daily_cost }}
-  diff_daily_cost:
-    value: ${{ steps.set_outputs.outputs.diff_daily_cost }}
-  total_hourly_cost:
-    value: ${{ steps.set_outputs.outputs.total_hourly_cost }}
-  diff_hourly_cost:
-    value: ${{ steps.set_outputs.outputs.diff_hourly_cost }}
+    default: "<!-- infracost-comment -->"
 
 runs:
-  using: composite
+  using: "composite"
   steps:
+    - uses: actions/setup-python@v6
+      with:
+        python-version: "3.x"
+
     - name: Install Infracost
       shell: bash
       run: |
         set -euo pipefail
-        if [ "${{ inputs.infracost_version }}" = "latest" ]; then
-          curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | sh
-        else
-          ver="v${{ inputs.infracost_version }}"
-          curl -fsSLO "https://github.com/infracost/infracost/releases/download/${ver}/infracost-linux-amd64.tar.gz"
-          curl -fsSLO "https://github.com/infracost/infracost/releases/download/${ver}/checksums.txt"
-          grep "infracost-linux-amd64.tar.gz" checksums.txt | sha256sum -c -
-          tar -xzf infracost-linux-amd64.tar.gz
-          mkdir -p "$HOME/.infracost/bin"
-          mv infracost-linux-amd64 "$HOME/.infracost/bin/infracost"
-        fi
-        echo "$HOME/.infracost/bin" >> "$GITHUB_PATH"
+        curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | sh
+        infracost --version
 
-    - name: Run Infracost
+    - name: Resolve paths
+      id: paths
       shell: bash
-      working-directory: ${{ inputs.working_dir }}
+      run: |
+        set -euo pipefail
+        WD="${{ inputs.working_dir }}"
+        BASE="${{ inputs.base_tfplan_path }}"
+
+        if [[ "$WD" != /* ]]; then WD="${GITHUB_WORKSPACE%/}/$WD"; fi
+        if [[ ! -f "$WD/tfplan.json" ]]; then
+          echo "Error: PR tfplan.json not found at $WD/tfplan.json" >&2
+          exit 1
+        fi
+        if [[ ! -f "$BASE" ]]; then
+          echo "Error: base_tfplan_path not found: $BASE" >&2
+          exit 1
+        fi
+
+        echo "wd=$WD" >> "$GITHUB_OUTPUT"
+        echo "base=$BASE" >> "$GITHUB_OUTPUT"
+
+    - name: Build diff JSON (baseline vs PR)
+      shell: bash
       env:
-        INFRACOST_API_KEY: ${{ inputs.infracost_api_key || env.INFRACOST_API_KEY }}
+        INFRACOST_API_KEY: ${{ env.INFRACOST_API_KEY }}
         INFRACOST_CURRENCY: ${{ inputs.currency }}
       run: |
         set -euo pipefail
-        test -f tfplan.json
-        mode="breakdown"
+        WD='${{ steps.paths.outputs.wd }}'
+        BASE='${{ steps.paths.outputs.base }}'
 
-        resolve() {
-          p="${1:-}"
-          [ -z "$p" ] && { echo ""; return; }
-          [ -f "$p" ] && { echo "$p"; return; }
-          [ -f "$GITHUB_WORKSPACE/$p" ] && { echo "$GITHUB_WORKSPACE/$p"; return; }
-          echo ""
-        }
+        infracost breakdown \
+          --path "$BASE" \
+          --format json \
+          --out-file "$WD/.infracost-base.json"
 
-        BASE_INFRA="$(resolve "${{ inputs.base_infracost_path }}")"
-        BASE_TFPLAN="$(resolve "${{ inputs.base_tfplan_path }}")"
+        infracost breakdown \
+          --path "$WD/tfplan.json" \
+          --format json \
+          --out-file "$WD/.infracost-pr.json"
 
-        if [ -n "$BASE_INFRA" ]; then
-          infracost diff --path tfplan.json --compare-to "$BASE_INFRA" --format json --out-file infracost.out.json
-          mode="diff"
-        elif [ -n "$BASE_TFPLAN" ]; then
-          infracost breakdown --path "$BASE_TFPLAN" --format json --out-file .infracost-base.json
-          infracost diff --path tfplan.json --compare-to .infracost-base.json --format json --out-file infracost.out.json
-          mode="diff"
-        else
-          infracost breakdown --path tfplan.json --format json --out-file infracost.out.json
-        fi
+        infracost diff \
+          --path "$WD/.infracost-pr.json" \
+          --compare-to "$WD/.infracost-base.json" \
+          --format json \
+          --out-file "$WD/infracost.out.json"
 
-        echo "$mode" > .infracost_mode
-
-    - id: set_outputs
-      name: Compute outputs and compose comment
+    - name: Generate PR comment markdown
       shell: bash
-      working-directory: ${{ inputs.working_dir }}
+      env:
+        PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        MENTION_HANDLES: ${{ inputs.mention_handles }}
+        INPUT_COMMENT_MARKER: ${{ inputs.comment_marker }}
+        BASE_BREAKDOWN_PATH: ${{ steps.paths.outputs.wd }}/.infracost-base.json
+        PR_BREAKDOWN_PATH:   ${{ steps.paths.outputs.wd }}/.infracost-pr.json
       run: |
         set -euo pipefail
-        total=$(jq -r '
-          (.summary.totalMonthlyCost // (
-            [ .projects[]?.breakdown.totalMonthlyCost // 0 | tonumber ] | add
-          ) // 0) | tonumber
-        ' infracost.out.json)
-        diff=$(jq -r '(.summary.diffTotalMonthlyCost // 0) | tonumber' infracost.out.json)
-        curr=$(jq -r '.currency // "USD"' infracost.out.json)
+        WD='${{ steps.paths.outputs.wd }}'
+        PY="$GITHUB_WORKSPACE/.github/scripts/infracost_comment.py"
+        python "$PY" "$WD/infracost.out.json" "$WD/infracost_comment.md"
 
-        daily_total=$(awk -v m="$total" 'BEGIN{printf "%.2f", (m/30)}')
-        daily_diff=$(awk -v d="$diff"  'BEGIN{printf "%.2f", (d/30)}')
-        hourly_total=$(awk -v m="$total" 'BEGIN{printf "%.4f", (m/730)}')
-        hourly_diff=$(awk -v d="$diff"  'BEGIN{printf "%.4f", (d/730)}')
-
-        monthly_total_fmt=$(awk -v m="$total" 'BEGIN{printf "%.2f", m}')
-        monthly_diff_fmt=$(awk -v d="$diff"  'BEGIN{printf "%.2f", d}')
-
-        echo "total_monthly_cost=$monthly_total_fmt" >> "$GITHUB_OUTPUT"
-        echo "diff_monthly_cost=$monthly_diff_fmt"   >> "$GITHUB_OUTPUT"
-        echo "currency=$curr"                        >> "$GITHUB_OUTPUT"
-        echo "total_daily_cost=$daily_total"         >> "$GITHUB_OUTPUT"
-        echo "diff_daily_cost=$daily_diff"           >> "$GITHUB_OUTPUT"
-        echo "total_hourly_cost=$hourly_total"       >> "$GITHUB_OUTPUT"
-        echo "diff_hourly_cost=$hourly_diff"         >> "$GITHUB_OUTPUT"
-
-        mode=$(cat .infracost_mode 2>/dev/null || echo breakdown)
-        arrow="↔️"; sign=""
-        if [ "$mode" = "diff" ]; then
-          if awk "BEGIN{exit !($diff > 0)}"; then arrow="⬆️"; sign="+"; fi
-          if awk "BEGIN{exit !($diff < 0)}"; then arrow="⬇️"; sign="";  fi
-        fi
-
-        daily_diff_fmt=$(awk -v x="$daily_diff" 'BEGIN{printf (x>=0?"+%.2f":"%.2f"), x}')
-        hourly_diff_fmt=$(awk -v x="$hourly_diff" 'BEGIN{printf (x>=0?"+%.4f":"%.4f"), x}')
-
-        {
-          printf "### 💸 Infracost Report\n"
-          printf "**📅 Monthly:** %s %s  |  %s Δ %s %s\n" "$curr" "$monthly_total_fmt" "$arrow" "$curr" "${sign}${monthly_diff_fmt}"
-          printf "**🗓️ Daily:** %s %s  |  %s Δ %s %s\n" "$curr" "$daily_total"       "$arrow" "$curr" "$daily_diff_fmt"
-          printf "**⏱️ Hourly:** %s %s  |  %s Δ %s %s\n" "$curr" "$hourly_total"     "$arrow" "$curr" "$hourly_diff_fmt"
-          printf "\n%s\n" "${{ inputs.comment_marker }}"
-        } > infracost_comment.md
-
-    - name: Post PR comment
-      if: ${{ github.event_name == 'pull_request' }}
+    - name: Create/Update PR comment
       uses: actions/github-script@v7
+      env:
+        PING_AUTHOR: ${{ inputs.ping_author }}
+        WD: ${{ steps.paths.outputs.wd }}
+        MARKER: ${{ inputs.comment_marker }}
       with:
         script: |
           const fs = require('fs');
           const path = require('path');
           const { owner, repo } = context.repo;
           const pr = context.payload.pull_request;
-          if (!pr) { return; }
+          if (!pr) return;
           const issue_number = pr.number;
+          const pingAuthor = (process.env.PING_AUTHOR || 'true').toLowerCase() === 'true';
           const author = pr.user.login;
-          const pingAuthor = '${{ inputs.ping_author }}'.toLowerCase() === 'true';
-          const extraMentions = '${{ inputs.mention_handles }}'
-            .split(',')
-            .map(s => s.trim())
-            .filter(Boolean)
-            .map(h => h.startsWith('@') ? h : `@${h}`)
-            .join(' ');
-          const mentionLine = [ pingAuthor ? `@${author}` : null, extraMentions || null ]
-            .filter(Boolean)
-            .join(' ');
-          const bodyBase = fs.readFileSync(
-            path.join(process.env.GITHUB_WORKSPACE, '${{ inputs.working_dir }}', 'infracost_comment.md'),
-            'utf8'
-          );
-          const marker = '${{ inputs.comment_marker }}';
-          const body = (mentionLine ? `${mentionLine}\n\n` : '') + bodyBase;
+          const bodyBase = fs.readFileSync(path.join(process.env.WD, 'infracost_comment.md'), 'utf8');
+          const body = (pingAuthor ? `@${author}\n\n` : '') + bodyBase;
+          const marker = process.env.MARKER || '<!-- infracost-comment -->';
           const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
           const existing = comments.find(c => c.body && c.body.includes(marker));
           if (existing) {
