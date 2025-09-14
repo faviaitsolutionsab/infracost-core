@@ -28,12 +28,12 @@ inputs:
   mention_handles:
     required: false
     default: ""
+  base_infracost_path:
+    required: false
+    default: ""
   base_tfplan_path:
     required: false
     default: ""
-  compare_with_git_base:
-    required: false
-    default: "true"
 
 outputs:
   total_monthly_cost:
@@ -81,15 +81,18 @@ runs:
         set -euo pipefail
         test -f tfplan.json
         mode="breakdown"
-        if [ -n "${{ inputs.base_tfplan_path }}" ] && [ -f "${{ inputs.base_tfplan_path }}" ]; then
-          infracost diff --path tfplan.json --compare-to "${{ inputs.base_tfplan_path }}" --format json --out-file infracost.out.json
+
+        if [ -n "${{ inputs.base_infracost_path }}" ] && [ -f "${{ inputs.base_infracost_path }}" ]; then
+          infracost diff --path tfplan.json --compare-to "${{ inputs.base_infracost_path }}" --format json --out-file infracost.out.json
           mode="diff"
-        elif [ "${GITHUB_EVENT_NAME}" = "pull_request" ] && [ "${{ inputs.compare_with_git_base }}" = "true" ]; then
-          infracost diff --path tfplan.json --compare-to git:base --format json --out-file infracost.out.json
+        elif [ -n "${{ inputs.base_tfplan_path }}" ] && [ -f "${{ inputs.base_tfplan_path }}" ]; then
+          infracost breakdown --path "${{ inputs.base_tfplan_path }}" --format json --out-file .infracost-base.json
+          infracost diff --path tfplan.json --compare-to .infracost-base.json --format json --out-file infracost.out.json
           mode="diff"
         else
           infracost breakdown --path tfplan.json --format json --out-file infracost.out.json
         fi
+
         echo "$mode" > .infracost_mode
 
     - id: set_outputs
@@ -105,12 +108,15 @@ runs:
         ' infracost.out.json)
         diff=$(jq -r '(.summary.diffTotalMonthlyCost // 0) | tonumber' infracost.out.json)
         curr=$(jq -r '.currency // "USD"' infracost.out.json)
+
         daily_total=$(awk -v m="$total" 'BEGIN{printf "%.2f", (m/30)}')
         daily_diff=$(awk -v d="$diff"  'BEGIN{printf "%.2f", (d/30)}')
         hourly_total=$(awk -v m="$total" 'BEGIN{printf "%.4f", (m/730)}')
         hourly_diff=$(awk -v d="$diff"  'BEGIN{printf "%.4f", (d/730)}')
+
         monthly_total_fmt=$(awk -v m="$total" 'BEGIN{printf "%.2f", m}')
         monthly_diff_fmt=$(awk -v d="$diff"  'BEGIN{printf "%.2f", d}')
+
         echo "total_monthly_cost=$monthly_total_fmt" >> "$GITHUB_OUTPUT"
         echo "diff_monthly_cost=$monthly_diff_fmt"   >> "$GITHUB_OUTPUT"
         echo "currency=$curr"                        >> "$GITHUB_OUTPUT"
@@ -118,14 +124,17 @@ runs:
         echo "diff_daily_cost=$daily_diff"           >> "$GITHUB_OUTPUT"
         echo "total_hourly_cost=$hourly_total"       >> "$GITHUB_OUTPUT"
         echo "diff_hourly_cost=$hourly_diff"         >> "$GITHUB_OUTPUT"
+
         mode=$(cat .infracost_mode 2>/dev/null || echo breakdown)
-        arrow="↔️"
-        sign=""
-        if awk "BEGIN{exit !($diff > 0)}"; then arrow="⬆️"; sign="+"; fi
-        if awk "BEGIN{exit !($diff < 0)}"; then arrow="⬇️"; sign="";  fi
-        if [ "$mode" != "diff" ]; then arrow="↔️"; sign=""; fi
+        arrow="↔️"; sign=""
+        if [ "$mode" = "diff" ]; then
+          if awk "BEGIN{exit !($diff > 0)}"; then arrow="⬆️"; sign="+"; fi
+          if awk "BEGIN{exit !($diff < 0)}"; then arrow="⬇️"; sign="";  fi
+        fi
+
         daily_diff_fmt=$(awk -v x="$daily_diff" 'BEGIN{printf (x>=0?"+%.2f":"%.2f"), x}')
         hourly_diff_fmt=$(awk -v x="$hourly_diff" 'BEGIN{printf (x>=0?"+%.4f":"%.4f"), x}')
+
         {
           printf "### 💸 Infracost Report\n"
           printf "**📅 Monthly:** %s %s  |  %s Δ %s %s\n" "$curr" "$monthly_total_fmt" "$arrow" "$curr" "${sign}${monthly_diff_fmt}"
