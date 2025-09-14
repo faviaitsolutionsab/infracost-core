@@ -1,0 +1,130 @@
+name: infracost-core
+description: Infracost on tfplan.json with monthly, daily, hourly and PR mentions
+branding:
+  icon: dollar-sign
+  color: green
+inputs:
+  working_dir:
+    required: false
+    default: .
+  currency:
+    required: false
+    default: SEK
+  behavior:
+    required: false
+    default: update
+  infracost_version:
+    required: false
+    default: latest
+  comment_marker:
+    required: false
+    default: "<!-- infracost-comment -->"
+  infracost_api_key:
+    required: false
+  ping_author:
+    required: false
+    default: "true"
+  mention_handles:
+    required: false
+    default: ""
+outputs:
+  total_monthly_cost:
+    value: ${{ steps.set_outputs.outputs.total_monthly_cost }}
+  diff_monthly_cost:
+    value: ${{ steps.set_outputs.outputs.diff_monthly_cost }}
+  currency:
+    value: ${{ steps.set_outputs.outputs.currency }}
+  total_daily_cost:
+    value: ${{ steps.set_outputs.outputs.total_daily_cost }}
+  diff_daily_cost:
+    value: ${{ steps.set_outputs.outputs.diff_daily_cost }}
+  total_hourly_cost:
+    value: ${{ steps.set_outputs.outputs.total_hourly_cost }}
+  diff_hourly_cost:
+    value: ${{ steps.set_outputs.outputs.diff_hourly_cost }}
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        if [ "${{ inputs.infracost_version }}" = "latest" ]; then vflag=""; else vflag="--version ${{ inputs.infracost_version }}"; fi
+        curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | sh -s -- $vflag
+        echo "$HOME/.infracost/bin" >> "$GITHUB_PATH"
+    - shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        INFRACOST_API_KEY: ${{ inputs.infracost_api_key || env.INFRACOST_API_KEY }}
+        INFRACOST_CURRENCY: ${{ inputs.currency }}
+      run: |
+        set -euo pipefail
+        test -f tfplan.json
+        infracost breakdown --path tfplan.json --format json --out-file infracost.json
+        infracost output --path infracost.json --format json --out-file infracost.out.json
+    - id: set_outputs
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      run: |
+        set -euo pipefail
+        total=$(jq -r '.summary.totalMonthlyCost' infracost.out.json)
+        diff=$(jq -r '.summary.diffTotalMonthlyCost' infracost.out.json)
+        curr=$(jq -r '.currency' infracost.out.json)
+        daily_total=$(python - <<'PY'
+import json; j=json.load(open('infracost.out.json')); print(f"{float(j['summary']['totalMonthlyCost'])/30:.2f}")
+PY
+)
+        daily_diff=$(python - <<'PY'
+import json; j=json.load(open('infracost.out.json')); print(f"{float(j['summary']['diffTotalMonthlyCost'])/30:.2f}")
+PY
+)
+        hourly_total=$(python - <<'PY'
+import json; j=json.load(open('infracost.out.json')); print(f"{float(j['summary']['totalMonthlyCost'])/730:.4f}")
+PY
+)
+        hourly_diff=$(python - <<'PY'
+import json; j=json.load(open('infracost.out.json')); print(f"{float(j['summary']['diffTotalMonthlyCost'])/730:.4f}")
+PY
+)
+        echo "total_monthly_cost=$total" >> "$GITHUB_OUTPUT"
+        echo "diff_monthly_cost=$diff" >> "$GITHUB_OUTPUT"
+        echo "currency=$curr" >> "$GITHUB_OUTPUT"
+        echo "total_daily_cost=$daily_total" >> "$GITHUB_OUTPUT"
+        echo "diff_daily_cost=$daily_diff" >> "$GITHUB_OUTPUT"
+        echo "total_hourly_cost=$hourly_total" >> "$GITHUB_OUTPUT"
+        echo "diff_hourly_cost=$hourly_diff" >> "$GITHUB_OUTPUT"
+        cat > infracost_comment.md <<EOF
+### 💸 Infracost Report
+**📅 Monthly:** ${curr} ${total}  |  Δ ${curr} ${diff}
+**🗓️ Daily:** ${curr} ${daily_total}  |  Δ ${curr} ${daily_diff}
+**⏱️ Hourly:** ${curr} ${hourly_total}  |  Δ ${curr} ${hourly_diff}
+
+${{ inputs.comment_marker }}
+EOF
+    - if: ${{ github.event_name == 'pull_request' }}
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs')
+          const path = require('path')
+          const { context, github } = require('@actions/github')
+          const { owner, repo } = context.repo
+          const issue_number = context.payload.pull_request.number
+          const author = context.payload.pull_request.user.login
+          const pingAuthor = '${{ inputs.ping_author }}'.toLowerCase() === 'true'
+          const extraMentions = '${{ inputs.mention_handles }}'
+            .split(',')
+            .map(s => s.trim())
+            .filter(Boolean)
+            .map(h => h.startsWith('@') ? h : `@${h}`)
+            .join(' ')
+          const mentionLine = [ pingAuthor ? `@${author}` : null, extraMentions || null ].filter(Boolean).join(' ')
+          const bodyBase = fs.readFileSync(path.join(process.env.GITHUB_WORKSPACE, '${{ inputs.working_dir }}', 'infracost_comment.md'), 'utf8')
+          const body = (mentionLine ? `${mentionLine}\n\n` : '') + bodyBase
+          const marker = '${{ inputs.comment_marker }}'
+          const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number })
+          const existing = comments.find(c => c.body && c.body.includes(marker))
+          if (existing) {
+            await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body })
+          } else {
+            await github.rest.issues.createComment({ owner, repo, issue_number, body })
+          }
