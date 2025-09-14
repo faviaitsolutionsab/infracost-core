@@ -6,42 +6,42 @@ branding:
 
 inputs:
   working_dir:
-    description: The working directory for the action.
+    description: Path to the Terraform working directory (where tfplan.json is located)
     required: false
     default: .
   currency:
-    description: The currency to use for cost calculations (e.g., USD, INR).
+    description: Currency code to display costs in (e.g., USD, INR, SEK)
     required: false
     default: INR
   infracost_version:
-    description: The version of Infracost to install (e.g., latest, 0.9.0).
+    description: Version of Infracost CLI to install (use "latest" for newest release)
     required: false
     default: latest
   comment_marker:
-    description: The marker used to identify Infracost comments in pull requests.
+    description: Marker used to identify/update sticky PR comments
     required: false
     default: "<!-- infracost-comment -->"
   infracost_api_key:
-    description: The API key for Infracost.
+    description: API key for Infracost Cloud (optional, can also be set via env)
     required: false
   ping_author:
-    description: Whether to ping the author in the PR comment.
+    description: Whether to tag the PR author in the comment ("true" or "false")
     required: false
     default: "true"
   mention_handles:
-    description: A comma-separated list of GitHub handles to mention in the PR comment.
+    description: Extra GitHub handles or teams to mention in the comment (comma-separated)
     required: false
     default: ""
   base_infracost_path:
-    description: The path to the base Infracost JSON file.
+    description: Path to a baseline Infracost JSON file to diff against
     required: false
     default: ""
   base_tfplan_path:
-    description: The path to the base Terraform plan file.
+    description: Path to a baseline Terraform plan JSON file to diff against
     required: false
     default: ""
   compare_with_git_base:
-    description: Whether to compare with the git base when running Infracost.
+    description: If true, compare with the git base branch when running on pull_request
     required: false
     default: "true"
 
@@ -76,6 +76,7 @@ runs:
       env:
         INFRACOST_API_KEY: ${{ inputs.infracost_api_key || env.INFRACOST_API_KEY }}
         INFRACOST_CURRENCY: ${{ inputs.currency }}
+        INFRACOST_LOG_LEVEL: debug
       run: |
         set -euo pipefail
         mode="breakdown"
@@ -102,7 +103,6 @@ runs:
           infracost breakdown \
             --path "$BASE_TFPLAN" \
             --format json --out-file .infracost-base.json
-
           infracost diff \
             --path tfplan.json \
             --compare-to .infracost-base.json \
@@ -126,7 +126,15 @@ runs:
         echo "$mode" > .infracost_mode
 
         infracost breakdown --path tfplan.json --format table --show-skipped || true
-        jq '{currency, summary, projects: (.projects // []) | length as n_projects}' infracost.out.json || true
+        jq '{currency, summary, n_projects: ((.projects // []) | length)}' infracost.out.json || true
+        jq -r '
+          [
+            "currency=" + (.currency // "n/a"),
+            "future=" + ((.summary.totalMonthlyCost // 0|tostring)),
+            "current=" + ((.summary.pastTotalMonthlyCost // 0|tostring)),
+            "delta=" + ((.summary.diffTotalMonthlyCost // 0|tostring))
+          ] | join("\n")
+        ' infracost.out.json || true
 
     - name: Build visual table
       shell: bash
