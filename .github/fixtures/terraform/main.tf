@@ -18,7 +18,7 @@ provider "aws" {
 
 variable "size_gb" {
   type    = number
-  default = 15
+  default = 12
 }
 
 resource "aws_ebs_volume" "test" {
