@@ -95,6 +95,8 @@ runs:
         PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         MENTION_HANDLES: ${{ inputs.mention_handles }}
         INPUT_COMMENT_MARKER: ${{ inputs.comment_marker }}
+        BASE_BREAKDOWN_PATH: ${{ steps.paths.outputs.wd }}/.infracost-base.json
+        PR_BREAKDOWN_PATH:   ${{ steps.paths.outputs.wd }}/.infracost-pr.json
       run: |
         set -euo pipefail
         WD='${{ steps.paths.outputs.wd }}'
