@@ -82,11 +82,22 @@ runs:
         test -f tfplan.json
         mode="breakdown"
 
-        if [ -n "${{ inputs.base_infracost_path }}" ] && [ -f "${{ inputs.base_infracost_path }}" ]; then
-          infracost diff --path tfplan.json --compare-to "${{ inputs.base_infracost_path }}" --format json --out-file infracost.out.json
+        resolve() {
+          p="${1:-}"
+          [ -z "$p" ] && { echo ""; return; }
+          [ -f "$p" ] && { echo "$p"; return; }
+          [ -f "$GITHUB_WORKSPACE/$p" ] && { echo "$GITHUB_WORKSPACE/$p"; return; }
+          echo ""
+        }
+
+        BASE_INFRA="$(resolve "${{ inputs.base_infracost_path }}")"
+        BASE_TFPLAN="$(resolve "${{ inputs.base_tfplan_path }}")"
+
+        if [ -n "$BASE_INFRA" ]; then
+          infracost diff --path tfplan.json --compare-to "$BASE_INFRA" --format json --out-file infracost.out.json
           mode="diff"
-        elif [ -n "${{ inputs.base_tfplan_path }}" ] && [ -f "${{ inputs.base_tfplan_path }}" ]; then
-          infracost breakdown --path "${{ inputs.base_tfplan_path }}" --format json --out-file .infracost-base.json
+        elif [ -n "$BASE_TFPLAN" ]; then
+          infracost breakdown --path "$BASE_TFPLAN" --format json --out-file .infracost-base.json
           infracost diff --path tfplan.json --compare-to .infracost-base.json --format json --out-file infracost.out.json
           mode="diff"
         else
