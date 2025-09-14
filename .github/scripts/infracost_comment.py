@@ -1,99 +1,64 @@
 #!/usr/bin/env python3
-import json, sys, re, math, os
+import json, os
 
-def money_to_float(s):
-    if not s:
-        return 0.0
-    # strip everything except digits, dot, minus
-    t = re.sub(r'[^0-9.\-]', '', s)
+# ---- Inputs (override with env vars) ----
+OUT_PATH      = os.getenv("INFRACOST_OUT_PATH", "infracost.out.json")
+COMMENT_PATH  = os.getenv("INFRACOST_COMMENT_PATH", "infracost_comment.md")
+AUTHOR        = os.getenv("PR_AUTHOR", "")
+MENTIONS      = os.getenv("MENTION_HANDLES", "")
+CURRENCY_FLAG = os.getenv("CURRENCY_FLAG", "🇺🇸")
+
+# ---- Helpers ----
+def to_float(x):
     try:
-        return float(t) if t else 0.0
-    except ValueError:
+        return float(x) if x not in (None, "", "-", "null") else 0.0
+    except Exception:
         return 0.0
 
-def sum_totals(data):
-    currency = data.get("currency") or "USD"
-    curr = currency
-    total_past = 0.0
-    total_prop = 0.0
-    total_delta = 0.0
-    for p in data.get("projects", []):
-        d = p.get("diff")
-        if d:
-            total_past   += money_to_float(d.get("pastTotalMonthlyCost"))
-            total_prop   += money_to_float(d.get("proposedTotalMonthlyCost"))
-            total_delta  += money_to_float(d.get("totalMonthlyCost"))
-        else:
-            b = p.get("breakdown") or {}
-            total_prop += money_to_float(b.get("totalMonthlyCost"))
-    if total_delta == 0.0 and total_past and total_prop:
-        total_delta = total_prop - total_past
-    return curr, total_past, total_prop, total_delta
+def money(x):    return f"${x:,.2f}"
+def money_hr(x): return f"${x:.4f}"
 
-def per_day(x):  return x/30.0
-def per_hour(x): return x/730.0
-
-def flag_for(currency):
-    m = {
-        "USD":"🇺🇸","EUR":"🇪🇺","GBP":"🇬🇧","SEK":"🇸🇪","NOK":"🇳🇴","DKK":"🇩🇰",
-        "INR":"🇮🇳","AUD":"🇦🇺","CAD":"🇨🇦","JPY":"🇯🇵","CHF":"🇨🇭","CNY":"🇨🇳"
-    }
-    return m.get(currency.upper(), "🏳️")
-
-def sym_for(currency):
-    m = {"USD":"$","EUR":"€","GBP":"£","SEK":"kr","NOK":"kr","DKK":"kr","INR":"₹","AUD":"$","CAD":"$","JPY":"¥","CHF":"CHF","CNY":"¥"}
-    return m.get(currency.upper(), currency.upper()+" ")
-
-def fmt_money(cur, x, places=2, pad=False):
-    sym = sym_for(cur)
-    s = f"{sym}{x:,.{places}f}"
-    return s.rjust(12) if pad else s
-
-def trend(delta):
-    if delta > 0.0005:  return "🔴 ↑"
-    if delta < -0.0005: return "🟢 ↓"
+def arrow(x):
+    if x > 0: return "🔴 ↑"
+    if x < 0: return "🟢 ↓"
     return "⚪ ↔️"
 
-def main(inp, outp):
-    with open(inp) as f:
-        data = json.load(f)
-    cur, past_m, prop_m, d_m = sum_totals(data)
-    d_d = per_day(d_m); d_h = per_hour(d_m)
-    past_d = per_day(past_m); prop_d = per_day(prop_m)
-    past_h = per_hour(past_m); prop_h = per_hour(prop_m)
+# ---- Load diff JSON ----
+with open(OUT_PATH) as f:
+    data = json.load(f)
 
-    flag = flag_for(cur)
-    T = trend(d_m)
+projects = data.get("projects", [])
 
-    author = os.getenv("PR_AUTHOR") or ""
-    mentions = (os.getenv("MENTION_HANDLES") or "").strip()
-    header_ping = (f"@{author}\n\n" if author else "")
-    if mentions:
-        header_ping += mentions + "\n\n"
+past   = sum(to_float(p.get("diff", {}).get("pastTotalMonthlyCost")) for p in projects)
+future = sum(to_float(p.get("diff", {}).get("totalMonthlyCost"))     for p in projects)
+delta  = sum(to_float(p.get("diff", {}).get("diffTotalMonthlyCost")) for p in projects)
 
-    lines = []
-    lines.append("### 💸 Infracost Report")
-    if header_ping.strip():
-        lines.append(header_ping.strip())
-        lines.append("")
-    if abs(d_m) < 0.0005:
-        lines.append("⚪ No cost change.")
-    else:
-        lines.append(f"{T} Monthly delta: {flag} {fmt_money(cur, d_m)}")
-    lines.append("")
-    lines.append("| Period | Current 🟦 | Future 🟨 | Δ |")
-    lines.append("|--------|-----------:|-----------:|---:|")
-    lines.append(f"| Monthly | {flag} {fmt_money(cur, past_m)} | {flag} {fmt_money(cur, prop_m)} | {T} {flag} {fmt_money(cur, d_m)} |")
-    lines.append(f"| Daily   | {flag} {fmt_money(cur, past_d)} | {flag} {fmt_money(cur, prop_d)} | {T} {flag} {fmt_money(cur, d_d)} |")
-    lines.append(f"| Hourly  | {flag} {fmt_money(cur, past_h,4)} | {flag} {fmt_money(cur, prop_h,4)} | {T} {flag} {fmt_money(cur, d_h,4)} |")
-    lines.append("")
-    lines.append(os.getenv("INPUT_COMMENT_MARKER") or "<!-- infracost-comment -->")
+# ---- Derived values ----
+daily_past,  daily_future,  daily_delta  = past/30.0,  future/30.0,  delta/30.0
+hourly_past, hourly_future, hourly_delta = past/730.0, future/730.0, delta/730.0
+arr = arrow(delta)
 
-    with open(outp, "w") as f:
-        f.write("\n".join(lines) + "\n")
+# ---- Markdown ----
+md = []
+if AUTHOR:
+    md.append(f"@{AUTHOR}")
+md.append("")
+md.append("### 💸 Infracost Report")
+if AUTHOR:
+    md.append(f"@{AUTHOR}")
+if MENTIONS:
+    md.append(MENTIONS)
 
-if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("usage: infracost_comment.py <infracost.out.json> <out.md>", file=sys.stderr)
-        sys.exit(2)
-    main(sys.argv[1], sys.argv[2])
+md.append(f"\n{arr} Monthly delta: {CURRENCY_FLAG} {money(delta)}\n")
+md.append("| Period | Current 🟦 | Future 🟨 | Δ |")
+md.append("|--------|-----------:|-----------:|---:|")
+md.append(f"| Monthly | {CURRENCY_FLAG} {money(past)} | {CURRENCY_FLAG} {money(future)} | {arr} {CURRENCY_FLAG} {money(delta)} |")
+md.append(f"| Daily   | {CURRENCY_FLAG} {money(daily_past)} | {CURRENCY_FLAG} {money(daily_future)} | {arr} {CURRENCY_FLAG} {money(daily_delta)} |")
+md.append(f"| Hourly  | {CURRENCY_FLAG} {money_hr(hourly_past)} | {CURRENCY_FLAG} {money_hr(hourly_future)} | {arr} {CURRENCY_FLAG} {money_hr(hourly_delta)} |")
+md.append("\n<!-- infracost-comment -->")
+
+os.makedirs(os.path.dirname(COMMENT_PATH) or ".", exist_ok=True)
+with open(COMMENT_PATH, "w") as f:
+    f.write("\n".join(md))
+
+print(f"✅ Wrote cost report to {COMMENT_PATH}")
