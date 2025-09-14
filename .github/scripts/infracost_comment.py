@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-import json, os, sys, pathlib
+import json, os, sys, pathlib, re
 
-# ---------- CLI args & env ----------
+# =========================
+# Inputs (args/env)
+# =========================
 argv_out   = sys.argv[1] if len(sys.argv) > 1 else ""
 argv_md    = sys.argv[2] if len(sys.argv) > 2 else ""
 
@@ -11,7 +13,7 @@ AUTHOR       = os.getenv("PR_AUTHOR", "").strip()
 MENTIONS     = os.getenv("MENTION_HANDLES", "").strip()
 MARKER       = os.getenv("INPUT_COMMENT_MARKER", "<!-- infracost-comment -->").strip()
 
-# Currency & flag handling
+# Currency & flag (flag appears ONCE in the delta line)
 CURRENCY     = os.getenv("INFRACOST_CURRENCY", os.getenv("CURRENCY", "USD")).upper().strip()
 FLAG_MAP = {
     "USD": "🇺🇸", "EUR": "🇪🇺", "GBP": "🇬🇧", "INR": "🇮🇳", "AUD": "🇦🇺",
@@ -19,13 +21,35 @@ FLAG_MAP = {
 }
 CURRENCY_FLAG = os.getenv("CURRENCY_FLAG", FLAG_MAP.get(CURRENCY, "💱")).strip()
 
-# ---------- Path resolution helpers ----------
+# =========================
+# Helpers
+# =========================
 def first_existing(paths):
     for p in paths:
         if p and os.path.isfile(p):
             return p
     return None
 
+def to_float(x):
+    if x in (None, "", "-", "null"):
+        return 0.0
+    try:
+        return float(x)
+    except Exception:
+        s = re.sub(r"[^\d\.\-eE]", "", str(x))
+        return float(s) if s else 0.0
+
+def money(x):    return f"${x:,.2f}"
+def money_hr(x): return f"${x:.4f}"
+
+def arrow(x):
+    if x > 0: return "🔴 ↑"
+    if x < 0: return "🟢 ↓"
+    return "⚪ ↔️"
+
+# =========================
+# Resolve OUT_PATH & COMMENT_PATH
+# =========================
 ws = os.getenv("GITHUB_WORKSPACE", "").rstrip("/")
 
 candidates_out = [
@@ -44,54 +68,52 @@ if not COMMENT_PATH:
     out_dir = os.path.dirname(OUT_PATH) or "."
     COMMENT_PATH = os.path.join(out_dir, "infracost_comment.md")
 
-# ---------- Formatting helpers ----------
-def to_float(x):
-    try:
-        if x in (None, "", "-", "null"):
-            return 0.0
-        return float(x)
-    except Exception:
-        try:
-            import re
-            s = re.sub(r"[^\d\.\-eE]", "", str(x))
-            return float(s) if s else 0.0
-        except Exception:
-            return 0.0
-
-def money(x):    return f"${x:,.2f}"
-def money_hr(x): return f"${x:.4f}"
-
-def arrow(x):
-    if x > 0: return "🔴 ↑"
-    if x < 0: return "🟢 ↓"
-    return "⚪ ↔️"
-
-# ---------- Load and aggregate ----------
-with open(OUT_PATH) as f:
+# =========================
+# Load & Aggregate (works for both diff modes)
+# =========================
+with open(OUT_PATH, "r", encoding="utf-8") as f:
     data = json.load(f)
 
-projects = data.get("projects", [])
-past   = 0.0
-future = 0.0
-delta  = 0.0
+def totals_from_top_summary(d):
+    s = d.get("summary") or {}
+    past   = to_float(s.get("pastTotalMonthlyCost"))
+    future = to_float(s.get("totalMonthlyCost"))
+    delta  = to_float(s.get("diffTotalMonthlyCost"))
+    if any(v != 0.0 for v in (past, future, delta)):
+        return past, future, delta
+    return None
 
-for p in projects:
-    d = p.get("diff") or {}
-    if d:
-        past   += to_float(d.get("pastTotalMonthlyCost"))
-        future += to_float(d.get("totalMonthlyCost"))
-        delta  += to_float(d.get("diffTotalMonthlyCost"))
-    else:
-        s = p.get("summary") or {}
-        past   += to_float(s.get("pastTotalMonthlyCost"))
-        future += to_float(s.get("totalMonthlyCost"))
-        delta  += to_float(s.get("diffTotalMonthlyCost"))
+def totals_from_projects(d):
+    past = future = delta = 0.0
+    for p in d.get("projects", []):
+        # Prefer per-project diff
+        diff = p.get("diff")
+        if diff:
+            past   += to_float(diff.get("pastTotalMonthlyCost"))
+            future += to_float(diff.get("totalMonthlyCost"))
+            delta  += to_float(diff.get("diffTotalMonthlyCost"))
+        else:
+            # Fallback to per-project summary if diff missing
+            s = p.get("summary") or {}
+            past   += to_float(s.get("pastTotalMonthlyCost"))
+            future += to_float(s.get("totalMonthlyCost"))
+            delta  += to_float(s.get("diffTotalMonthlyCost"))
+    return past, future, delta
 
+totals = totals_from_top_summary(data)
+if totals is None:
+    totals = totals_from_projects(data)
+
+past, future, delta = totals
+
+# Derived periods
 daily_past,  daily_future,  daily_delta  = past/30.0,  future/30.0,  delta/30.0
 hourly_past, hourly_future, hourly_delta = past/730.0, future/730.0, delta/730.0
 arr = arrow(delta)
 
-# ---------- Markdown (flag only in delta line) ----------
+# =========================
+# Markdown (flag ONCE in delta line; table shows plain $)
+# =========================
 md = []
 if AUTHOR:
     md.append(f"@{AUTHOR}")
