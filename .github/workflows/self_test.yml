@@ -24,7 +24,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Priced, no-creds-needed AWS fixture (EC2 + gp3) for real costs
       - name: Ensure Terraform fixture
         run: |
           mkdir -p .github/fixtures/terraform
@@ -35,7 +34,6 @@ jobs:
               aws = { source = "hashicorp/aws", version = "~> 5.0" }
             }
           }
-
           provider "aws" {
             region                      = "us-east-1"
             access_key                  = "mock"
@@ -45,28 +43,21 @@ jobs:
             skip_requesting_account_id  = true
             skip_region_validation      = true
           }
-
           variable "instance_type" {
-            description = "EC2 type"
-            type        = string
-            default     = "t3.micro"
+            type    = string
+            default = "t3.micro"
           }
-
           variable "root_volume_size" {
-            description = "Root EBS volume size (GB)"
-            type        = number
-            default     = 20
+            type    = number
+            default = 20
           }
-
           resource "aws_instance" "web" {
             ami           = "ami-12345678"
             instance_type = var.instance_type
-
             root_block_device {
               volume_type = "gp3"
               volume_size = var.root_volume_size
             }
-
             tags = { Name = "infracost-local-web" }
           }
           HCL
@@ -80,7 +71,6 @@ jobs:
         working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
         run: terraform init -input=false
 
-      # Baseline (cheaper): t3.micro + 20GB
       - name: Terraform plan (baseline)
         working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
         run: |
@@ -91,7 +81,6 @@ jobs:
           mkdir -p _base/${{ env.TF_ACTIONS_WORKING_DIR }}
           cp tfplan.json _base/${{ env.TF_ACTIONS_WORKING_DIR }}/tfplan.json
 
-      # PR (more expensive): m5.large + 100GB
       - name: Terraform plan (PR)
         working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
         run: |
@@ -100,7 +89,6 @@ jobs:
             -var="root_volume_size=100"
           terraform show -json tfplan.bin > tfplan.json
 
-      # Run your local composite action; it will do plan-to-plan diff and render table
       - name: Infracost self-test (local action)
         uses: ./
         with:
@@ -113,13 +101,11 @@ jobs:
         env:
           INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
 
-      # Show the table in the job summary (nice visual in CI)
       - name: Append table to job summary
         if: ${{ always() }}
         working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
         run: cat infracost_comment.md >> "$GITHUB_STEP_SUMMARY"
 
-      # Upload outputs so you can download and inspect locally
       - name: Upload Infracost artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
