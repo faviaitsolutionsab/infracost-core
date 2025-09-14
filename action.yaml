@@ -39,9 +39,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        ver="${{ inputs.infracost_version }}"
         curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | sh
-        echo "Installed $(infracost --version)"
+        infracost --version
 
     - name: Resolve paths
       id: paths
@@ -50,12 +49,17 @@ runs:
         set -euo pipefail
         WD="${{ inputs.working_dir }}"
         BASE="${{ inputs.base_tfplan_path }}"
-        # absolutize working dir relative to workspace if needed
+
         if [[ "$WD" != /* ]]; then WD="${GITHUB_WORKSPACE%/}/$WD"; fi
+        if [[ ! -f "$WD/tfplan.json" ]]; then
+          echo "Error: PR tfplan.json not found at $WD/tfplan.json" >&2
+          exit 1
+        fi
         if [[ ! -f "$BASE" ]]; then
           echo "Error: base_tfplan_path not found: $BASE" >&2
           exit 1
         fi
+
         echo "wd=$WD" >> "$GITHUB_OUTPUT"
         echo "base=$BASE" >> "$GITHUB_OUTPUT"
 
@@ -63,29 +67,24 @@ runs:
       shell: bash
       env:
         INFRACOST_API_KEY: ${{ env.INFRACOST_API_KEY }}
+        INFRACOST_CURRENCY: ${{ inputs.currency }}
       run: |
         set -euo pipefail
         WD='${{ steps.paths.outputs.wd }}'
         BASE='${{ steps.paths.outputs.base }}'
-        CUR='USD'
-        [[ -n "${{ inputs.currency }}" ]] && CUR="${{ inputs.currency }}"
 
-        # Optional: write a baseline breakdown JSON (handy artifact)
+        # Optional: baseline breakdown artifact (no currency flag here; env is used)
         infracost breakdown \
           --path "$BASE" \
-          --currency "$CUR" \
           --format json \
           --out-file "$WD/.infracost-base.json"
 
-        # The important one: DIFF current PR plan (tfplan.json) vs baseline tfplan.json
+        # The important one: DIFF current PR plan vs baseline plan
         infracost diff \
           --path "$WD/tfplan.json" \
           --compare-to "$BASE" \
-          --currency "$CUR" \
           --format json \
           --out-file "$WD/infracost.out.json"
-
-        echo "Wrote $WD/infracost.out.json"
 
     - name: Generate PR comment markdown
       shell: bash
@@ -97,10 +96,6 @@ runs:
         set -euo pipefail
         WD='${{ steps.paths.outputs.wd }}'
         PY="$GITHUB_WORKSPACE/.github/scripts/infracost_comment.py"
-        if [[ ! -f "$PY" ]]; then
-          echo "Missing script: $PY" >&2
-          exit 1
-        fi
         python "$PY" "$WD/infracost.out.json" "$WD/infracost_comment.md"
 
     - name: Create/Update PR comment
