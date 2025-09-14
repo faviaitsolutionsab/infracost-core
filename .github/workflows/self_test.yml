@@ -17,13 +17,15 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       TF_ACTIONS_WORKING_DIR: .github/fixtures/terraform
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Write priced Terraform fixture (if missing)
+      # Priced, no-creds-needed AWS fixture (EC2 + gp3) for real costs
+      - name: Ensure Terraform fixture
         run: |
           mkdir -p .github/fixtures/terraform
           cat > .github/fixtures/terraform/main.tf <<'HCL'
@@ -65,9 +67,7 @@ jobs:
               volume_size = var.root_volume_size
             }
 
-            tags = { 
-              Name = "infracost-local-web" 
-            }
+            tags = { Name = "infracost-local-web" }
           }
           HCL
 
@@ -80,6 +80,7 @@ jobs:
         working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
         run: terraform init -input=false
 
+      # Baseline (cheaper): t3.micro + 20GB
       - name: Terraform plan (baseline)
         working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
         run: |
@@ -90,6 +91,7 @@ jobs:
           mkdir -p _base/${{ env.TF_ACTIONS_WORKING_DIR }}
           cp tfplan.json _base/${{ env.TF_ACTIONS_WORKING_DIR }}/tfplan.json
 
+      # PR (more expensive): m5.large + 100GB
       - name: Terraform plan (PR)
         working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
         run: |
@@ -98,6 +100,7 @@ jobs:
             -var="root_volume_size=100"
           terraform show -json tfplan.bin > tfplan.json
 
+      # Run your local composite action; it will do plan-to-plan diff and render table
       - name: Infracost self-test (local action)
         uses: ./
         with:
@@ -110,6 +113,20 @@ jobs:
         env:
           INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
 
-      - name: Print generated comment (for logs)
+      # Show the table in the job summary (nice visual in CI)
+      - name: Append table to job summary
+        if: ${{ always() }}
         working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
-        run: cat infracost_comment.md
+        run: cat infracost_comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      # Upload outputs so you can download and inspect locally
+      - name: Upload Infracost artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: infracost-selftest
+          path: |
+            ${{ env.TF_ACTIONS_WORKING_DIR }}/infracost.out.json
+            ${{ env.TF_ACTIONS_WORKING_DIR }}/infracost_comment.md
+            _base/${{ env.TF_ACTIONS_WORKING_DIR }}/tfplan.json
+            ${{ env.TF_ACTIONS_WORKING_DIR }}/tfplan.json
