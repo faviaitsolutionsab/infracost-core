@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [ main ]
     paths:
-      - "action.yml"
+      - "action.yaml"
       - ".github/scripts/infracost_comment.py"
       - ".github/fixtures/terraform/**"
 
