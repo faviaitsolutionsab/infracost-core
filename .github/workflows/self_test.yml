@@ -1,0 +1,96 @@
+name: Infracost Core — Self Test on PR
+
+on:
+  pull_request:
+    branches: [ master ]
+    paths:
+      - "action.yml"
+      - ".github/scripts/infracost_comment.py"
+      - ".github/fixtures/terraform/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  selftest:
+    runs-on: ubuntu-24.04
+    env:
+      TF_ACTIONS_WORKING_DIR: .github/fixtures/terraform
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Write priced Terraform fixture (if missing)
+        run: |
+          mkdir -p .github/fixtures/terraform
+          cat > .github/fixtures/terraform/main.tf <<'HCL'
+          terraform {
+            required_version = ">= 1.12.0"
+            required_providers {
+              aws = { source = "hashicorp/aws", version = "~> 6.0" }
+            }
+          }
+          provider "aws" {
+            region                      = "us-east-1"
+            access_key                  = "mock"
+            secret_key                  = "mock"
+            skip_credentials_validation = true
+            skip_metadata_api_check     = true
+            skip_requesting_account_id  = true
+            skip_region_validation      = true
+          }
+          variable "instance_type" { type = string  default = "t3.micro" }
+          variable "root_volume_size" { type = number default = 20 }
+          resource "aws_instance" "web" {
+            ami           = "ami-12345678"
+            instance_type = var.instance_type
+            root_block_device { volume_type = "gp3" volume_size = var.root_volume_size }
+            tags = { Name = "infracost-local-web" }
+          }
+          HCL
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.12.1
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
+        run: terraform init -input=false
+
+      - name: Terraform plan (baseline)
+        working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
+        run: |
+          terraform plan -input=false -lock=false -out=tfplan.bin \
+            -var="instance_type=t3.micro" \
+            -var="root_volume_size=20"
+          terraform show -json tfplan.bin > tfplan.json
+          mkdir -p _base/${{ env.TF_ACTIONS_WORKING_DIR }}
+          cp tfplan.json _base/${{ env.TF_ACTIONS_WORKING_DIR }}/tfplan.json
+
+      - name: Terraform plan (PR)
+        working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
+        run: |
+          terraform plan -input=false -lock=false -out=tfplan.bin \
+            -var="instance_type=m5.large" \
+            -var="root_volume_size=100"
+          terraform show -json tfplan.bin > tfplan.json
+
+      - name: Infracost self-test (local action)
+        uses: ./
+        with:
+          working_dir: ${{ env.TF_ACTIONS_WORKING_DIR }}
+          base_tfplan_path: ${{ github.workspace }}/_base/${{ env.TF_ACTIONS_WORKING_DIR }}/tfplan.json
+          currency: INR
+          compare_with_git_base: "false"
+          ping_author: "true"
+          mention_handles: "@infracost-bot"
+        env:
+          INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Print generated comment (for logs)
+        working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
+        run: cat infracost_comment.md

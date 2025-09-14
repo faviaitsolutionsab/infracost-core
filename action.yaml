@@ -1,5 +1,5 @@
 name: infracost-core
-description: Infracost on tfplan.json with monthly, daily, hourly and PR mentions
+description: Infracost with current vs future cost table, emojis, and PR mentions
 branding:
   icon: dollar-sign
   color: green
@@ -10,10 +10,7 @@ inputs:
     default: .
   currency:
     required: false
-    default: SEK
-  behavior:
-    required: false
-    default: update
+    default: INR
   infracost_version:
     required: false
     default: latest
@@ -34,26 +31,18 @@ inputs:
   base_tfplan_path:
     required: false
     default: ""
-
-outputs:
-  total_monthly_cost:
-    value: ${{ steps.set_outputs.outputs.total_monthly_cost }}
-  diff_monthly_cost:
-    value: ${{ steps.set_outputs.outputs.diff_monthly_cost }}
-  currency:
-    value: ${{ steps.set_outputs.outputs.currency }}
-  total_daily_cost:
-    value: ${{ steps.set_outputs.outputs.total_daily_cost }}
-  diff_daily_cost:
-    value: ${{ steps.set_outputs.outputs.diff_daily_cost }}
-  total_hourly_cost:
-    value: ${{ steps.set_outputs.outputs.total_hourly_cost }}
-  diff_hourly_cost:
-    value: ${{ steps.set_outputs.outputs.diff_hourly_cost }}
+  compare_with_git_base:
+    required: false
+    default: "true"
 
 runs:
   using: composite
   steps:
+    - name: Setup Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+
     - name: Install Infracost
       shell: bash
       run: |
@@ -79,9 +68,7 @@ runs:
         INFRACOST_CURRENCY: ${{ inputs.currency }}
       run: |
         set -euo pipefail
-        test -f tfplan.json
         mode="breakdown"
-
         resolve() {
           p="${1:-}"
           [ -z "$p" ] && { echo ""; return; }
@@ -89,70 +76,34 @@ runs:
           [ -f "$GITHUB_WORKSPACE/$p" ] && { echo "$GITHUB_WORKSPACE/$p"; return; }
           echo ""
         }
-
         BASE_INFRA="$(resolve "${{ inputs.base_infracost_path }}")"
         BASE_TFPLAN="$(resolve "${{ inputs.base_tfplan_path }}")"
-
         if [ -n "$BASE_INFRA" ]; then
-          infracost diff --path tfplan.json --compare-to "$BASE_INFRA" --format json --out-file infracost.out.json
+          infracost diff --path "$GITHUB_WORKSPACE/${{ inputs.working_dir }}" --compare-to "$BASE_INFRA" --format json --out-file infracost.out.json
           mode="diff"
         elif [ -n "$BASE_TFPLAN" ]; then
           infracost breakdown --path "$BASE_TFPLAN" --format json --out-file .infracost-base.json
-          infracost diff --path tfplan.json --compare-to .infracost-base.json --format json --out-file infracost.out.json
+          infracost diff --path "$GITHUB_WORKSPACE/${{ inputs.working_dir }}" --compare-to .infracost-base.json --format json --out-file infracost.out.json
+          mode="diff"
+        elif [ "${{ inputs.compare_with_git_base }}" = "true" ] && [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+          infracost diff --path "$GITHUB_WORKSPACE/${{ inputs.working_dir }}" --compare-to git:base --format json --out-file infracost.out.json
           mode="diff"
         else
+          test -f tfplan.json
           infracost breakdown --path tfplan.json --format json --out-file infracost.out.json
         fi
-
         echo "$mode" > .infracost_mode
 
-    - id: set_outputs
-      name: Compute outputs and compose comment
+    - name: Build visual table
       shell: bash
       working-directory: ${{ inputs.working_dir }}
+      env:
+        PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        MENTION_HANDLES: ${{ inputs.mention_handles }}
+        INPUT_COMMENT_MARKER: ${{ inputs.comment_marker }}
       run: |
         set -euo pipefail
-        total=$(jq -r '
-          (.summary.totalMonthlyCost // (
-            [ .projects[]?.breakdown.totalMonthlyCost // 0 | tonumber ] | add
-          ) // 0) | tonumber
-        ' infracost.out.json)
-        diff=$(jq -r '(.summary.diffTotalMonthlyCost // 0) | tonumber' infracost.out.json)
-        curr=$(jq -r '.currency // "USD"' infracost.out.json)
-
-        daily_total=$(awk -v m="$total" 'BEGIN{printf "%.2f", (m/30)}')
-        daily_diff=$(awk -v d="$diff"  'BEGIN{printf "%.2f", (d/30)}')
-        hourly_total=$(awk -v m="$total" 'BEGIN{printf "%.4f", (m/730)}')
-        hourly_diff=$(awk -v d="$diff"  'BEGIN{printf "%.4f", (d/730)}')
-
-        monthly_total_fmt=$(awk -v m="$total" 'BEGIN{printf "%.2f", m}')
-        monthly_diff_fmt=$(awk -v d="$diff"  'BEGIN{printf "%.2f", d}')
-
-        echo "total_monthly_cost=$monthly_total_fmt" >> "$GITHUB_OUTPUT"
-        echo "diff_monthly_cost=$monthly_diff_fmt"   >> "$GITHUB_OUTPUT"
-        echo "currency=$curr"                        >> "$GITHUB_OUTPUT"
-        echo "total_daily_cost=$daily_total"         >> "$GITHUB_OUTPUT"
-        echo "diff_daily_cost=$daily_diff"           >> "$GITHUB_OUTPUT"
-        echo "total_hourly_cost=$hourly_total"       >> "$GITHUB_OUTPUT"
-        echo "diff_hourly_cost=$hourly_diff"         >> "$GITHUB_OUTPUT"
-
-        mode=$(cat .infracost_mode 2>/dev/null || echo breakdown)
-        arrow="↔️"; sign=""
-        if [ "$mode" = "diff" ]; then
-          if awk "BEGIN{exit !($diff > 0)}"; then arrow="⬆️"; sign="+"; fi
-          if awk "BEGIN{exit !($diff < 0)}"; then arrow="⬇️"; sign="";  fi
-        fi
-
-        daily_diff_fmt=$(awk -v x="$daily_diff" 'BEGIN{printf (x>=0?"+%.2f":"%.2f"), x}')
-        hourly_diff_fmt=$(awk -v x="$hourly_diff" 'BEGIN{printf (x>=0?"+%.4f":"%.4f"), x}')
-
-        {
-          printf "### 💸 Infracost Report\n"
-          printf "**📅 Monthly:** %s %s  |  %s Δ %s %s\n" "$curr" "$monthly_total_fmt" "$arrow" "$curr" "${sign}${monthly_diff_fmt}"
-          printf "**🗓️ Daily:** %s %s  |  %s Δ %s %s\n" "$curr" "$daily_total"       "$arrow" "$curr" "$daily_diff_fmt"
-          printf "**⏱️ Hourly:** %s %s  |  %s Δ %s %s\n" "$curr" "$hourly_total"     "$arrow" "$curr" "$hourly_diff_fmt"
-          printf "\n%s\n" "${{ inputs.comment_marker }}"
-        } > infracost_comment.md
+        python .github/scripts/infracost_comment.py infracost.out.json infracost_comment.md
 
     - name: Post PR comment
       if: ${{ github.event_name == 'pull_request' }}
@@ -163,25 +114,13 @@ runs:
           const path = require('path');
           const { owner, repo } = context.repo;
           const pr = context.payload.pull_request;
-          if (!pr) { return; }
+          if (!pr) return;
           const issue_number = pr.number;
-          const author = pr.user.login;
           const pingAuthor = '${{ inputs.ping_author }}'.toLowerCase() === 'true';
-          const extraMentions = '${{ inputs.mention_handles }}'
-            .split(',')
-            .map(s => s.trim())
-            .filter(Boolean)
-            .map(h => h.startsWith('@') ? h : `@${h}`)
-            .join(' ');
-          const mentionLine = [ pingAuthor ? `@${author}` : null, extraMentions || null ]
-            .filter(Boolean)
-            .join(' ');
-          const bodyBase = fs.readFileSync(
-            path.join(process.env.GITHUB_WORKSPACE, '${{ inputs.working_dir }}', 'infracost_comment.md'),
-            'utf8'
-          );
+          const author = pr.user.login;
+          const bodyBase = fs.readFileSync(path.join(process.env.GITHUB_WORKSPACE, '${{ inputs.working_dir }}', 'infracost_comment.md'), 'utf8');
+          const body = (pingAuthor ? `@${author}\n\n` : '') + bodyBase;
           const marker = '${{ inputs.comment_marker }}';
-          const body = (mentionLine ? `${mentionLine}\n\n` : '') + bodyBase;
           const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
           const existing = comments.find(c => c.body && c.body.includes(marker));
           if (existing) {
