@@ -2,7 +2,7 @@ name: Infracost Core — Self Test on PR
 
 on:
   pull_request:
-    branches: [ master ]
+    branches: [ main ]
     paths:
       - "action.yml"
       - ".github/scripts/infracost_comment.py"
