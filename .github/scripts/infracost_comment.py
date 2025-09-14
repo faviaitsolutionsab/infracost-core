@@ -51,7 +51,6 @@ def to_float(x):
             return 0.0
         return float(x)
     except Exception:
-        # Some Infracost strings might include currency symbols; strip non-numeric
         try:
             import re
             s = re.sub(r"[^\d\.\-eE]", "", str(x))
@@ -72,7 +71,6 @@ with open(OUT_PATH) as f:
     data = json.load(f)
 
 projects = data.get("projects", [])
-# Support both "diff" (from infracost diff) and "summary" keys if present
 past   = 0.0
 future = 0.0
 delta  = 0.0
@@ -84,7 +82,6 @@ for p in projects:
         future += to_float(d.get("totalMonthlyCost"))
         delta  += to_float(d.get("diffTotalMonthlyCost"))
     else:
-        # Fallback: use summary if diff missing (rare)
         s = p.get("summary") or {}
         past   += to_float(s.get("pastTotalMonthlyCost"))
         future += to_float(s.get("totalMonthlyCost"))
@@ -94,22 +91,22 @@ daily_past,  daily_future,  daily_delta  = past/30.0,  future/30.0,  delta/30.0
 hourly_past, hourly_future, hourly_delta = past/730.0, future/730.0, delta/730.0
 arr = arrow(delta)
 
-# ---------- Markdown ----------
+# ---------- Markdown (flag only in delta line) ----------
 md = []
 if AUTHOR:
     md.append(f"@{AUTHOR}")
 if MENTIONS:
     md.append(MENTIONS)
 if md:
-    md.append("")  # blank line before title
+    md.append("")
 
 md.append("### 💸 Infracost Report")
 md.append(f"\n{arr} Monthly delta: {CURRENCY_FLAG} {money(delta)}\n")
 md.append("| Period | Current 🟦 | Future 🟨 | Δ |")
 md.append("|--------|-----------:|-----------:|---:|")
-md.append(f"| Monthly | {CURRENCY_FLAG} {money(past)} | {CURRENCY_FLAG} {money(future)} | {arr} {CURRENCY_FLAG} {money(delta)} |")
-md.append(f"| Daily   | {CURRENCY_FLAG} {money(daily_past)} | {CURRENCY_FLAG} {money(daily_future)} | {arr} {CURRENCY_FLAG} {money(daily_delta)} |")
-md.append(f"| Hourly  | {CURRENCY_FLAG} {money_hr(hourly_past)} | {CURRENCY_FLAG} {money_hr(hourly_future)} | {arr} {CURRENCY_FLAG} {money_hr(hourly_delta)} |")
+md.append(f"| Monthly | {money(past)} | {money(future)} | {arr} {money(delta)} |")
+md.append(f"| Daily   | {money(daily_past)} | {money(daily_future)} | {arr} {money(daily_delta)} |")
+md.append(f"| Hourly  | {money_hr(hourly_past)} | {money_hr(hourly_future)} | {arr} {money_hr(hourly_delta)} |")
 md.append(f"\n{MARKER}")
 
 pathlib.Path(os.path.dirname(COMMENT_PATH) or ".").mkdir(parents=True, exist_ok=True)
