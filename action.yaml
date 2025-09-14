@@ -83,28 +83,50 @@ runs:
       working-directory: ${{ inputs.working_dir }}
       run: |
         set -euo pipefail
-        total=$(jq -r '.summary.totalMonthlyCost' infracost.out.json)
-        diff=$(jq -r '.summary.diffTotalMonthlyCost' infracost.out.json)
-        curr=$(jq -r '.currency' infracost.out.json)
 
-        daily_total=$(jq -r '.summary.totalMonthlyCost | (tonumber/30) | floor*1.0 + ((tonumber/30)-floor)*1.0 | @text' infracost.out.json | awk '{printf "%.2f", $1}')
-        daily_diff=$(jq -r '.summary.diffTotalMonthlyCost | (tonumber/30) | @text' infracost.out.json | awk '{printf "%.2f", $1}')
-        hourly_total=$(jq -r '.summary.totalMonthlyCost | (tonumber/730) | @text' infracost.out.json | awk '{printf "%.4f", $1}')
-        hourly_diff=$(jq -r '.summary.diffTotalMonthlyCost | (tonumber/730) | @text' infracost.out.json | awk '{printf "%.4f", $1}')
+        total=$(jq -r '
+          (.summary.totalMonthlyCost // (
+            [ .projects[]?.breakdown.totalMonthlyCost // 0 | tonumber ] | add
+          ) // 0) | tonumber
+        ' infracost.out.json)
 
-        echo "total_monthly_cost=$total" >> "$GITHUB_OUTPUT"
-        echo "diff_monthly_cost=$diff" >> "$GITHUB_OUTPUT"
-        echo "currency=$curr" >> "$GITHUB_OUTPUT"
-        echo "total_daily_cost=$daily_total" >> "$GITHUB_OUTPUT"
-        echo "diff_daily_cost=$daily_diff" >> "$GITHUB_OUTPUT"
-        echo "total_hourly_cost=$hourly_total" >> "$GITHUB_OUTPUT"
-        echo "diff_hourly_cost=$hourly_diff" >> "$GITHUB_OUTPUT"
+        diff=$(jq -r '
+          (.summary.diffTotalMonthlyCost // 0) | tonumber
+        ' infracost.out.json)
 
-        printf "%s\n" "### 💸 Infracost Report" > infracost_comment.md
-        printf "%s\n" "**📅 Monthly:** ${curr} ${total}  |  Δ ${curr} ${diff}  " >> infracost_comment.md
-        printf "%s\n" "**🗓️ Daily:** ${curr} ${daily_total}  |  Δ ${curr} ${daily_diff}  " >> infracost_comment.md
-        printf "%s\n" "**⏱️ Hourly:** ${curr} ${hourly_total}  |  Δ ${curr} ${hourly_diff}" >> infracost_comment.md
-        printf "\n%s\n" "${{ inputs.comment_marker }}" >> infracost_comment.md
+        curr=$(jq -r '.currency // "USD"' infracost.out.json)
+
+        daily_total=$(awk -v m="$total" 'BEGIN{printf "%.2f", (m/30)}')
+        daily_diff=$(awk -v d="$diff"  'BEGIN{printf "%.2f", (d/30)}')
+        hourly_total=$(awk -v m="$total" 'BEGIN{printf "%.4f", (m/730)}')
+        hourly_diff=$(awk -v d="$diff"  'BEGIN{printf "%.4f", (d/730)}')
+
+        monthly_total_fmt=$(awk -v m="$total" 'BEGIN{printf "%.2f", m}')
+        monthly_diff_fmt=$(awk -v d="$diff"  'BEGIN{printf "%.2f", d}')
+
+        echo "total_monthly_cost=$monthly_total_fmt" >> "$GITHUB_OUTPUT"
+        echo "diff_monthly_cost=$monthly_diff_fmt"   >> "$GITHUB_OUTPUT"
+        echo "currency=$curr"                        >> "$GITHUB_OUTPUT"
+        echo "total_daily_cost=$daily_total"         >> "$GITHUB_OUTPUT"
+        echo "diff_daily_cost=$daily_diff"           >> "$GITHUB_OUTPUT"
+        echo "total_hourly_cost=$hourly_total"       >> "$GITHUB_OUTPUT"
+        echo "diff_hourly_cost=$hourly_diff"         >> "$GITHUB_OUTPUT"
+
+        arrow="↔️"
+        sign=""
+        awk "BEGIN{exit !($diff > 0)}" && { arrow="⬆️"; sign="+"; } || true
+        awk "BEGIN{exit !($diff < 0)}" && { arrow="⬇️"; sign="";  } || true
+
+        daily_diff_fmt=$(awk -v x="$daily_diff" 'BEGIN{printf (x>=0?"+%.2f":"%.2f"), x}')
+        hourly_diff_fmt=$(awk -v x="$hourly_diff" 'BEGIN{printf (x>=0?"+%.4f":"%.4f"), x}')
+
+        {
+          printf "### 💸 Infracost Report\n"
+          printf "**📅 Monthly:** %s %s  |  %s Δ %s %s\n" "$curr" "$monthly_total_fmt" "$arrow" "$curr" "${sign}${monthly_diff_fmt}"
+          printf "**🗓️ Daily:** %s %s  |  %s Δ %s %s\n" "$curr" "$daily_total"       "$arrow" "$curr" "$daily_diff_fmt"
+          printf "**⏱️ Hourly:** %s %s  |  %s Δ %s %s\n" "$curr" "$hourly_total"     "$arrow" "$curr" "$hourly_diff_fmt"
+          printf "\n%s\n" "${{ inputs.comment_marker }}"
+        } > infracost_comment.md
 
     - name: Post PR comment
       if: ${{ github.event_name == 'pull_request' }}
