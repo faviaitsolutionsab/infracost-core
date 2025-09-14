@@ -81,16 +81,31 @@ runs:
         set -euo pipefail
         mode="breakdown"
 
+        echo "INPUT_base_infracost_path='${{ inputs.base_infracost_path }}'"
+        echo "INPUT_base_tfplan_path='${{ inputs.base_tfplan_path }}'"
+
         resolve() {
           p="${1:-}"
           [ -z "$p" ] && { echo ""; return; }
-          [ -f "$p" ] && { echo "$p"; return; }
-          [ -f "$GITHUB_WORKSPACE/$p" ] && { echo "$GITHUB_WORKSPACE/$p"; return; }
+          if [ -f "$p" ]; then echo "$p"; return; fi
+          if [ -f "$GITHUB_WORKSPACE/$p" ]; then echo "$GITHUB_WORKSPACE/$p"; return; fi
           echo ""
         }
 
         BASE_INFRA="$(resolve "${{ inputs.base_infracost_path }}")"
         BASE_TFPLAN="$(resolve "${{ inputs.base_tfplan_path }}")"
+        echo "RESOLVED_base_infracost_path='$BASE_INFRA'"
+        echo "RESOLVED_base_tfplan_path='$BASE_TFPLAN'"
+
+        if [ -n "${{ inputs.base_tfplan_path }}" ] && [ -z "$BASE_TFPLAN" ]; then
+          echo "::error::base_tfplan_path was provided but file not found. Pwd=$(pwd)"
+          echo "::group::Workspace tree (_base)"
+          ls -la "$GITHUB_WORKSPACE" || true
+          ls -la "$GITHUB_WORKSPACE/_base" || true
+          find "$GITHUB_WORKSPACE/_base" -maxdepth 5 -type f -name 'tfplan.json' 2>/dev/null || true
+          echo "::endgroup::"
+          exit 1
+        fi
 
         if [ -n "$BASE_INFRA" ]; then
           infracost diff \
@@ -103,6 +118,7 @@ runs:
           infracost breakdown \
             --path "$BASE_TFPLAN" \
             --format json --out-file .infracost-base.json
+
           infracost diff \
             --path tfplan.json \
             --compare-to .infracost-base.json \
@@ -125,16 +141,21 @@ runs:
 
         echo "$mode" > .infracost_mode
 
+        echo "::group::Sanity: PR plan pricing table"
         infracost breakdown --path tfplan.json --format table --show-skipped || true
+        echo "::endgroup::"
+
+        echo "::group::Sanity: diff summary JSON"
         jq '{currency, summary, n_projects: ((.projects // []) | length)}' infracost.out.json || true
         jq -r '
           [
             "currency=" + (.currency // "n/a"),
-            "future=" + ((.summary.totalMonthlyCost // 0|tostring)),
-            "current=" + ((.summary.pastTotalMonthlyCost // 0|tostring)),
-            "delta=" + ((.summary.diffTotalMonthlyCost // 0|tostring))
+            "future="   + ((.summary.totalMonthlyCost    // 0 | tostring)),
+            "current="  + ((.summary.pastTotalMonthlyCost // 0 | tostring)),
+            "delta="    + ((.summary.diffTotalMonthlyCost // 0 | tostring))
           ] | join("\n")
         ' infracost.out.json || true
+        echo "::endgroup::"
 
     - name: Build visual table
       shell: bash
