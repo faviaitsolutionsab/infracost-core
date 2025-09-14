@@ -73,16 +73,22 @@ runs:
         WD='${{ steps.paths.outputs.wd }}'
         BASE='${{ steps.paths.outputs.base }}'
 
-        # Optional: baseline breakdown artifact (no currency flag here; env is used)
+        # Convert BASE Terraform plan JSON → Infracost JSON
         infracost breakdown \
           --path "$BASE" \
           --format json \
           --out-file "$WD/.infracost-base.json"
 
-        # The important one: DIFF current PR plan vs baseline plan
-        infracost diff \
+        # Convert PR Terraform plan JSON → Infracost JSON
+        infracost breakdown \
           --path "$WD/tfplan.json" \
-          --compare-to "$BASE" \
+          --format json \
+          --out-file "$WD/.infracost-pr.json"
+
+        # Now run diff between Infracost JSON files
+        infracost diff \
+          --path "$WD/.infracost-pr.json" \
+          --compare-to "$WD/.infracost-base.json" \
           --format json \
           --out-file "$WD/infracost.out.json"
 
