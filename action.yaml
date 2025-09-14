@@ -1,5 +1,11 @@
 name: "Infracost Core"
 description: "Render current vs future cloud cost table and comment on PR"
+author: faviaitsolutionab@gmail.com
+
+branding:
+  icon: cloud
+  color: blue
+  
 inputs:
   working_dir:
     description: "Directory that contains tfplan.json for the PR plan"
