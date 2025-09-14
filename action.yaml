@@ -103,7 +103,9 @@ runs:
         INPUT_COMMENT_MARKER: ${{ inputs.comment_marker }}
       run: |
         set -euo pipefail
-        python .github/scripts/infracost_comment.py infracost.out.json infracost_comment.md
+        python "$GITHUB_WORKSPACE/.github/scripts/infracost_comment.py" \
+          "$GITHUB_WORKSPACE/${{ inputs.working_dir }}/infracost.out.json" \
+          "$GITHUB_WORKSPACE/${{ inputs.working_dir }}/infracost_comment.md"
 
     - name: Post PR comment
       if: ${{ github.event_name == 'pull_request' }}
