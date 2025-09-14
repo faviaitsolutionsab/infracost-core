@@ -5,7 +5,7 @@ author: faviaitsolutionab@gmail.com
 branding:
   icon: cloud
   color: blue
-  
+
 inputs:
   working_dir:
     description: "Directory that contains tfplan.json for the PR plan"
@@ -14,11 +14,11 @@ inputs:
     description: "Absolute path to baseline tfplan.json to compare against"
     required: true
   currency:
-    description: "Currency code, e.g., USD, EUR, INR"
+    description: "Currency code (e.g., SEK, USD, EUR)"
     required: false
     default: USD
   ping_author:
-    description: "Ping PR author in the comment"
+    description: "Mention PR author in the comment"
     required: false
     default: "true"
   mention_handles:
@@ -26,11 +26,11 @@ inputs:
     required: false
     default: ""
   infracost_version:
-    description: "Infracost CLI version"
+    description: "Infracost CLI version or 'latest'"
     required: false
     default: "latest"
   comment_marker:
-    description: "Marker to allow updates"
+    description: "Marker to deduplicate PR comments"
     required: false
     default: "<!-- infracost-comment -->"
 
@@ -39,13 +39,17 @@ runs:
   steps:
     - uses: actions/setup-python@v6
       with:
-        python-version: "3.x"
+        python-version: "3.13"
 
     - name: Install Infracost
       shell: bash
       run: |
         set -euo pipefail
-        curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | sh
+        if [ "${{ inputs.infracost_version }}" = "latest" ]; then
+          curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | sh
+        else
+          curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | sh -s -- -v "${{ inputs.infracost_version }}"
+        fi
         infracost --version
 
     - name: Resolve paths
@@ -55,21 +59,13 @@ runs:
         set -euo pipefail
         WD="${{ inputs.working_dir }}"
         BASE="${{ inputs.base_tfplan_path }}"
-
         if [[ "$WD" != /* ]]; then WD="${GITHUB_WORKSPACE%/}/$WD"; fi
-        if [[ ! -f "$WD/tfplan.json" ]]; then
-          echo "Error: PR tfplan.json not found at $WD/tfplan.json" >&2
-          exit 1
-        fi
-        if [[ ! -f "$BASE" ]]; then
-          echo "Error: base_tfplan_path not found: $BASE" >&2
-          exit 1
-        fi
-
+        if [[ ! -f "$WD/tfplan.json" ]]; then echo "PR tfplan.json not found at $WD/tfplan.json" >&2; exit 1; fi
+        if [[ ! -f "$BASE" ]]; then echo "base_tfplan_path not found: $BASE" >&2; exit 1; fi
         echo "wd=$WD" >> "$GITHUB_OUTPUT"
         echo "base=$BASE" >> "$GITHUB_OUTPUT"
 
-    - name: Build diff JSON (baseline vs PR)
+    - name: Build breakdowns and diff
       shell: bash
       env:
         INFRACOST_API_KEY: ${{ env.INFRACOST_API_KEY }}
@@ -78,22 +74,9 @@ runs:
         set -euo pipefail
         WD='${{ steps.paths.outputs.wd }}'
         BASE='${{ steps.paths.outputs.base }}'
-
-        infracost breakdown \
-          --path "$BASE" \
-          --format json \
-          --out-file "$WD/.infracost-base.json"
-
-        infracost breakdown \
-          --path "$WD/tfplan.json" \
-          --format json \
-          --out-file "$WD/.infracost-pr.json"
-
-        infracost diff \
-          --path "$WD/.infracost-pr.json" \
-          --compare-to "$WD/.infracost-base.json" \
-          --format json \
-          --out-file "$WD/infracost.out.json"
+        infracost breakdown --path "$BASE" --format json --out-file "$WD/.infracost-base.json"
+        infracost breakdown --path "$WD/tfplan.json" --format json --out-file "$WD/.infracost-pr.json"
+        infracost diff --path "$WD/.infracost-pr.json" --compare-to "$WD/.infracost-base.json" --format json --out-file "$WD/infracost.out.json"
 
     - name: Generate PR comment markdown
       shell: bash
@@ -101,12 +84,12 @@ runs:
         PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         MENTION_HANDLES: ${{ inputs.mention_handles }}
         INPUT_COMMENT_MARKER: ${{ inputs.comment_marker }}
-        BASE_BREAKDOWN_PATH: ${{ steps.paths.outputs.wd }}/.infracost-base.json
-        PR_BREAKDOWN_PATH:   ${{ steps.paths.outputs.wd }}/.infracost-pr.json
+        INFRACOST_CURRENCY: ${{ inputs.currency }}
+        INFRACOST_WD: ${{ steps.paths.outputs.wd }}
       run: |
         set -euo pipefail
         WD='${{ steps.paths.outputs.wd }}'
-        PY="$GITHUB_WORKSPACE/.github/scripts/infracost_comment.py"
+        PY="${{ github.action_path }}/scripts/infracost_comment.py"
         python "$PY" "$WD/infracost.out.json" "$WD/infracost_comment.md"
 
     - name: Create/Update PR comment
