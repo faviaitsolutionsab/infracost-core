@@ -103,7 +103,7 @@ jobs:
         with:
           working_dir: ${{ env.TF_ACTIONS_WORKING_DIR }}
           base_tfplan_path: ${{ github.workspace }}/_base/${{ env.TF_ACTIONS_WORKING_DIR }}/tfplan.json
-          currency: INR
+          currency: USD
           compare_with_git_base: "false"
           ping_author: "true"
           mention_handles: "@infracost-bot"
