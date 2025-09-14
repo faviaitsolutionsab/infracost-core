@@ -73,19 +73,16 @@ runs:
         WD='${{ steps.paths.outputs.wd }}'
         BASE='${{ steps.paths.outputs.base }}'
 
-        # Convert BASE Terraform plan JSON → Infracost JSON
         infracost breakdown \
           --path "$BASE" \
           --format json \
           --out-file "$WD/.infracost-base.json"
 
-        # Convert PR Terraform plan JSON → Infracost JSON
         infracost breakdown \
           --path "$WD/tfplan.json" \
           --format json \
           --out-file "$WD/.infracost-pr.json"
 
-        # Now run diff between Infracost JSON files
         infracost diff \
           --path "$WD/.infracost-pr.json" \
           --compare-to "$WD/.infracost-base.json" \
