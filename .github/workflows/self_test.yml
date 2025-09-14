@@ -65,17 +65,15 @@ jobs:
       - name: Terraform plan (baseline)
         working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
         run: |
-          terraform plan -input=false -lock=false -out=tfplan.bin \
-            -var="size_gb=20"
+          terraform plan -input=false -lock=false -out=tfplan.bin -var="size_gb=20"
           terraform show -json tfplan.bin > tfplan.json
-          mkdir -p _base/${{ env.TF_ACTIONS_WORKING_DIR }}
-          cp tfplan.json _base/${{ env.TF_ACTIONS_WORKING_DIR }}/tfplan.json
+          mkdir -p "$GITHUB_WORKSPACE/_base/${{ env.TF_ACTIONS_WORKING_DIR }}"
+          cp tfplan.json "$GITHUB_WORKSPACE/_base/${{ env.TF_ACTIONS_WORKING_DIR }}/tfplan.json"
 
       - name: Terraform plan (PR)
         working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
         run: |
-          terraform plan -input=false -lock=false -out=tfplan.bin \
-            -var="size_gb=200"
+          terraform plan -input=false -lock=false -out=tfplan.bin -var="size_gb=200"
           terraform show -json tfplan.bin > tfplan.json
 
       - name: Infracost self-test (local action)
