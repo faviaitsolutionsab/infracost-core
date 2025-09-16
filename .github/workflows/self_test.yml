@@ -73,7 +73,7 @@ jobs:
       - name: Terraform plan (PR)
         working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
         run: |
-          terraform plan -input=false -lock=false -out=tfplan.bin -var="size_gb=200"
+          terraform plan -input=false -lock=false -out=tfplan.bin -var="size_gb=2000"
           terraform show -json tfplan.bin > tfplan.json
 
       - name: Infracost self-test (local action)
