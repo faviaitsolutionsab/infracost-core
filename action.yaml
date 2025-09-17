@@ -78,8 +78,8 @@ runs:
         set -euo pipefail
         WD='${{ steps.paths.outputs.wd }}'
         BASE='${{ steps.paths.outputs.base }}'
-        infracost breakdown --terraform-plan-json "$BASE" --format json --out-file "$WD/.infracost-base.json"
-        infracost breakdown --terraform-plan-json "$WD/tfplan.json" --format json --out-file "$WD/.infracost-pr.json"
+        infracost breakdown --path "$BASE" --format json --out-file "$WD/.infracost-base.json"
+        infracost breakdown --path "$WD/tfplan.json" --format json --out-file "$WD/.infracost-pr.json"
         infracost diff --path "$WD/.infracost-pr.json" --compare-to "$WD/.infracost-base.json" --format json --out-file "$WD/infracost.out.json"
 
     - name: Generate PR comment markdown
