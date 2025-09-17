@@ -84,6 +84,8 @@ jobs:
           currency: USD
           ping_author: "true"
           mention_handles: "@infracost-bot"
+          comment_marker: "<!-- infracost-comment:selftest -->"
+          comment_title: "💸 Infracost Report (Self Test)"
         env:
           INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
 

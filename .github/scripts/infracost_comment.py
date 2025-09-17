@@ -8,6 +8,10 @@ AUTHOR   = os.getenv("PR_AUTHOR", "").strip()
 MENTIONS = os.getenv("MENTION_HANDLES", "").strip()
 MARKER   = os.getenv("INPUT_COMMENT_MARKER", "<!-- infracost-comment -->").strip()
 
+PING_AUTHOR   = os.getenv("PING_AUTHOR", "true").lower() in ("1","true","yes")
+PING_MENTIONS = os.getenv("PING_MENTIONS", "false").lower() in ("1","true","yes")
+COMMENT_TITLE = os.getenv("COMMENT_TITLE", "💸 Infracost Report").strip()
+
 CURRENCY = os.getenv("INFRACOST_CURRENCY", os.getenv("CURRENCY", "USD")).upper().strip()
 FLAG_MAP = {"USD":"🇺🇸","EUR":"🇪🇺","GBP":"🇬🇧","INR":"🇮🇳","AUD":"🇦🇺","CAD":"🇨🇦","JPY":"🇯🇵","NZD":"🇳🇿","CHF":"🇨🇭","SEK":"🇸🇪"}
 CURRENCY_FLAG = os.getenv("CURRENCY_FLAG", FLAG_MAP.get(CURRENCY, "💱")).strip()
@@ -89,10 +93,13 @@ hourly_current, hourly_future, hourly_delta = current/730.0, future/730.0, delta
 arr = arrow(delta)
 
 lines = [MARKER]
-if AUTHOR:   lines.append(f"@{AUTHOR}")
-if MENTIONS: lines.append(MENTIONS)
-if AUTHOR or MENTIONS: lines.append("")
-lines.append("### 💸 Infracost Report\n")
+if AUTHOR and PING_AUTHOR:
+    lines.append(f"@{AUTHOR}")
+if MENTIONS and PING_MENTIONS:
+    lines.append(MENTIONS)
+if (AUTHOR and PING_AUTHOR) or (MENTIONS and PING_MENTIONS):
+    lines.append("")
+lines.append(f"### {COMMENT_TITLE}\n")
 lines.append(f"{arr} Monthly delta: {CURRENCY_FLAG} {money(delta)}\n")
 lines.append("| Period | Current 🟦 | Future 🟨 | Δ |")
 lines.append("|--------|-----------:|-----------:|---:|")
