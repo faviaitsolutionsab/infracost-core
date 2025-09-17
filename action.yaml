@@ -33,6 +33,10 @@ inputs:
     description: "Marker to deduplicate PR comments"
     required: false
     default: "<!-- infracost-comment -->"
+  comment_title:
+    description: "Markdown H3 title for the comment"
+    required: false
+    default: "💸 Infracost Report"
 
 runs:
   using: "composite"
@@ -74,8 +78,8 @@ runs:
         set -euo pipefail
         WD='${{ steps.paths.outputs.wd }}'
         BASE='${{ steps.paths.outputs.base }}'
-        infracost breakdown --path "$BASE" --format json --out-file "$WD/.infracost-base.json"
-        infracost breakdown --path "$WD/tfplan.json" --format json --out-file "$WD/.infracost-pr.json"
+        infracost breakdown --terraform-plan-json "$BASE" --format json --out-file "$WD/.infracost-base.json"
+        infracost breakdown --terraform-plan-json "$WD/tfplan.json" --format json --out-file "$WD/.infracost-pr.json"
         infracost diff --path "$WD/.infracost-pr.json" --compare-to "$WD/.infracost-base.json" --format json --out-file "$WD/infracost.out.json"
 
     - name: Generate PR comment markdown
@@ -86,6 +90,9 @@ runs:
         INPUT_COMMENT_MARKER: ${{ inputs.comment_marker }}
         INFRACOST_CURRENCY: ${{ inputs.currency }}
         INFRACOST_WD: ${{ steps.paths.outputs.wd }}
+        PING_AUTHOR: ${{ inputs.ping_author }}
+        PING_MENTIONS: ${{ inputs.ping_author }}
+        COMMENT_TITLE: ${{ inputs.comment_title }}
       run: |
         set -euo pipefail
         WD='${{ steps.paths.outputs.wd }}'
@@ -95,7 +102,6 @@ runs:
     - name: Create/Update PR comment
       uses: actions/github-script@v7
       env:
-        PING_AUTHOR: ${{ inputs.ping_author }}
         WD: ${{ steps.paths.outputs.wd }}
         MARKER: ${{ inputs.comment_marker }}
       with:
@@ -106,10 +112,7 @@ runs:
           const pr = context.payload.pull_request;
           if (!pr) return;
           const issue_number = pr.number;
-          const pingAuthor = (process.env.PING_AUTHOR || 'true').toLowerCase() === 'true';
-          const author = pr.user.login;
-          const bodyBase = fs.readFileSync(path.join(process.env.WD, 'infracost_comment.md'), 'utf8');
-          const body = (pingAuthor ? `@${author}\n\n` : '') + bodyBase;
+          const body = fs.readFileSync(path.join(process.env.WD, 'infracost_comment.md'), 'utf8');
           const marker = process.env.MARKER || '<!-- infracost-comment -->';
           const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
           const existing = comments.find(c => c.body && c.body.includes(marker));
